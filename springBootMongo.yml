@@ -60,7 +60,7 @@ spec:
     spec:
       containers:
       - name: springappcontainer
-        image: mistryvibe/spring-boot-mongo-docker
+        image: mistryvibe/spring-boot-app:1
         ports:
         - containerPort: 8080
         env:
