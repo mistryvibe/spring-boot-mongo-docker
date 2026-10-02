@@ -1,141 +1,142 @@
-kind: ConfigMap
 apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: springappconfigmap
+    name: mongoconfigmap
+    namespace: test-ns
 data:
-  username: springapp
-  password: mongodb@123
-
+    mongo_Host: mongosvcheadless
+    mongo_User: devdb
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: springappsecrets
+    name: mongosecret
+    namespace: test-ns
 type: Opaque
-stringData:   # We can define multiple key value pairs.
-  password: devdb@123
-
+data:
+    mongo_password: ZGV2ZGIxMjM=
 ---
 apiVersion: v1
-kind: PersistentVolume
+kind: Service
 metadata:
-  name: pv-hostpath
+    name: mongosvcheadless
+    namespace: test-ns
 spec:
-  storageClassName: manual
-  capacity:
-    storage: 1Gi
-  accessModes:
-  - ReadWriteOnce
-  hostPath:
-    path: "/tmp/mongodata"
+    clusterIP: None
+    selector:
+        app: mongod
+    ports:
+      - port: 27017
+        targetPort: 27017
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
+apiVersion: apps/v1
+kind: StatefulSet
 metadata:
-  name: pvc-hostpath
+    name: mongod
+    namespace: test-ns
 spec:
-  storageClassName: manual
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Mi
-
+    selector:
+        matchLabels:
+            app: mongod
+    serviceName: mongosvcheadless
+    replicas: 2
+    template:
+        metadata:
+            labels:
+                app: mongod
+        spec:
+            containers:
+              - name: mongod
+                image: mongo:7.0
+                resources:
+                    requests:
+                        cpu: 200m
+                        memory: 256Mi
+                    limits:
+                        cpu: 500m
+                        memory: 500Mi
+                args:
+                  - "mongod"
+                  - "--replSet"
+                  - "MainRepSet"
+                  - "--bind_ip"
+                  - "0.0.0.0"
+                ports:
+                  - containerPort: 27017
+                volumeMounts:
+                  - name: mongovolstate
+                    mountPath: /data/db
+    volumeClaimTemplates:
+      - metadata:
+            name: mongovolstate
+        spec:
+            accessModes: [ "ReadWriteOnce" ]
+            resources:
+                requests:
+                    storage: 1Gi
 ---
-## Spring Boot App
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: springappdeployment
+    name: splingdbdeployment
+    namespace: test-ns
+    labels:
+        app: springdb
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: springapp
-  template:
-    metadata:
-      name: springapppod
-      labels:
-        app: springapp
-    spec:
-      containers:
-      - name: springappcontainer
-        image: mistryvibe/spring-boot-app:1
-        ports:
-        - containerPort: 8080
-        env:
-        - name: MONGO_DB_USERNAME
-          valueFrom:
-            configMapKeyRef:
-              name: springappconfigmap
-              key: username
-        - name: MONGO_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: springappsecrets
-              key: password
-        - name: MONGO_DB_HOSTNAME
-          value: mongo
+    selector:
+        matchLabels:
+            app: springdb
+    replicas: 1
+    strategy:
+        rollingUpdate:
+            maxSurge: 25%
+            maxUnavailable: 25%
+        type: RollingUpdate
+    template:
+        metadata:
+            labels:
+                app: springdb
+        spec:
+            containers:
+              - name: springdb
+                image: mistryvibe/spring-boot-app:13
+                resources:
+                    requests:
+                        cpu: 200m
+                        memory: 256Mi
+                    limits:
+                        cpu: 300m
+                        memory: 500Mi
+                env:
+                  - name: MONGO_DB_HOSTNAME
+                    valueFrom:
+                        configMapKeyRef:
+                            name: mongoconfigmap
+                            key: mongo_Host
+                  - name: MONGO_DB_USERNAME
+                    valueFrom:
+                        configMapKeyRef:
+                            name: mongoconfigmap
+                            key: mongo_User
+                  - name: MONGO_DB_PASSWORD
+                    valueFrom:
+                        secretKeyRef:
+                            name: mongosecret
+                            key: mongo_password
+                ports:
+                  - containerPort: 8080
+                    name: springdb
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: springapp
+    name: springsvc
+    namespace: test-ns
 spec:
-  selector:
-    app: springapp
-  ports:
-  - port: 80
-    targetPort: 8080
-  type: NodePort
----
-# Mongo db pod with volumes(HostPath)
-apiVersion: apps/v1
-kind: ReplicaSet
-metadata:
-  name: mongodbrs
-spec:
-  selector:
-    matchLabels:
-      app: mongodb
-  template:
-     metadata:
-       name: mongodbpod
-       labels:
-         app: mongodb
-     spec:
-       volumes:
-       - name: mongodb-pvc
-         persistentVolumeClaim:
-           claimName: pvc-hostpath
-       containers:
-       - name: mongodbcontainer
-         image: mongo
-         ports:
-         - containerPort: 27017
-         env:
-         - name: MONGO_INITDB_ROOT_USERNAME
-           valueFrom:
-             configMapKeyRef:
-               name: springappconfigmap
-               key: username
-         - name: MONGO_INITDB_ROOT_PASSWORD
-           valueFrom:
-             secretKeyRef:
-               name: springappsecrets
-               key: password
-         volumeMounts:
-         - name: mongodb-pvc
-           mountPath: /data/db
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: mongo
-spec:
-  type: ClusterIP
-  selector:
-    app: mongodb
-  ports:
-  - port: 27017
-    targetPort: 27017
+    selector:
+        app: springdb
+    type: NodePort
+    ports:
+      - port: 8080
+        targetPort: 8080
+        nodePort: 30000
